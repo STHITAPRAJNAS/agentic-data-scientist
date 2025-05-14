@@ -16,6 +16,8 @@ from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+TEMP_DIR = os.getenv("TEMP_DIR", "temp_code")
+os.makedirs(TEMP_DIR, exist_ok=True)
 
 # Import our modules
 from config import config
@@ -42,6 +44,8 @@ if "current_data" not in st.session_state:
     st.session_state.current_data = None
 if "data_source" not in st.session_state:
     st.session_state.data_source = None
+if "data_source_type" not in st.session_state:
+    st.session_state.data_source_type = None
 if "explorer_agent" not in st.session_state:
     st.session_state.explorer_agent = None
 if "feature_engineer_agent" not in st.session_state:
@@ -54,6 +58,12 @@ if "engineered_data" not in st.session_state:
     st.session_state.engineered_data = None
 if "model_results" not in st.session_state:
     st.session_state.model_results = {}
+
+# Add new session state variables for data persistence
+if "loaded_data_info" not in st.session_state:
+    st.session_state.loaded_data_info = None
+if "is_data_loaded" not in st.session_state:
+    st.session_state.is_data_loaded = False
 
 # Custom CSS
 st.markdown("""
@@ -176,8 +186,97 @@ def initialize_agents():
         st.error(f"Error initializing agents: {str(e)}")
         return False
 
+def sanitize_dataframe(df):
+    """Helper function to sanitize dataframe for display and PyArrow conversion."""
+    if df is None:
+        return None
+    
+    try:
+        # Make a copy to avoid modifying the original
+        df = df.copy()
+        
+        # Force conversion of all float dtypes to basic numpy float64
+        for col in df.select_dtypes(include=['float', 'Float64']).columns:
+            df[col] = df[col].astype('float64')
+        
+        # Force conversion of all integer dtypes to basic numpy int64
+        for col in df.select_dtypes(include=['integer', 'Int64']).columns:
+            df[col] = df[col].astype('int64')
+            
+        # Force conversion of all object dtypes to string
+        for col in df.select_dtypes(include=['object']).columns:
+            df[col] = df[col].astype(str)
+            
+        # Replace any infinite values with NaN
+        df = df.replace([np.inf, -np.inf], np.nan)
+        
+        # Downcast to more efficient types
+        for col in df.columns:
+            if df[col].dtype == 'float64':
+                df[col] = pd.to_numeric(df[col], downcast='float')
+            elif df[col].dtype == 'int64':
+                df[col] = pd.to_numeric(df[col], downcast='integer')
+                
+        # Drop any columns that still cause issues
+        problematic_cols = []
+        for col in df.columns:
+            try:
+                # Test if this column can be converted to arrow
+                pd.DataFrame({col: df[col]}).to_numpy()
+            except Exception:
+                problematic_cols.append(col)
+                
+        if problematic_cols:
+            print(f"Warning: Dropping problematic columns: {problematic_cols}")
+            df = df.drop(columns=problematic_cols)
+            
+    except Exception as e:
+        print(f"Warning: Could not convert data types: {e}")
+        # Last resort: convert everything to strings
+        for col in df.columns:
+            try:
+                df[col] = df[col].astype(str)
+            except:
+                df[col] = ["ERROR"] * len(df)
+    
+    return df
+
+def persist_dataframes():
+    """Store copies of the current dataframe for stability across reruns."""
+    # Only persist if data is actually loaded
+    if not st.session_state.is_data_loaded:
+        return
+        
+    df = st.session_state.current_data
+    if df is None or (hasattr(df, 'empty') and df.empty):
+        return
+    
+    # First clear any existing copies to avoid memory leaks or stale data
+    feature_engineering_df = None
+    modeling_df = None
+    exploration_df = None
+    dim_reduction_df = None
+        
+    # Make a deep copy of the dataframe for each major function
+    st.session_state.feature_engineering_df = df.copy() 
+    st.session_state.modeling_df = df.copy()
+    st.session_state.exploration_df = df.copy()
+    
+    # Log for debugging
+    st.session_state.data_state_debug = {
+        "timestamp": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "shape": df.shape,
+        "columns": list(df.columns)
+    }
+
 def display_dataframe(df: pd.DataFrame, max_rows: int = 10) -> None:
     """Display a dataframe with a download button."""
+    # Convert to standard types to avoid ArrowInvalid errors
+    df = sanitize_dataframe(df)
+    if df is None:
+        st.error("Unable to display dataframe - invalid data")
+        return
+        
     st.dataframe(df.head(max_rows))
     
     # Add download button
@@ -222,6 +321,10 @@ def handle_file_upload() -> None:
                 df = pd.read_csv(file_path)
                 st.session_state.current_data = df
                 st.session_state.data_source = f"Uploaded file: {uploaded_file.name}"
+                st.session_state.data_source_type = "Uploaded file"
+                st.session_state.is_data_loaded = True
+                # Create persistent copies for tab functions
+                persist_dataframes()
                 st.success(f"Successfully loaded data from {uploaded_file.name}")
                 
                 # Display the data
@@ -234,6 +337,10 @@ def handle_file_upload() -> None:
                     df = sheets[sheet_name]
                     st.session_state.current_data = df
                     st.session_state.data_source = f"Uploaded file: {uploaded_file.name} (Sheet: {sheet_name})"
+                    st.session_state.data_source_type = f"Uploaded file: {uploaded_file.name} (Sheet: {sheet_name})"
+                    st.session_state.is_data_loaded = True
+                    # Create persistent copies for tab functions
+                    persist_dataframes()
                     st.success(f"Successfully loaded data from {uploaded_file.name}, sheet {sheet_name}")
                     
                     # Display the data
@@ -241,6 +348,32 @@ def handle_file_upload() -> None:
             else:
                 st.error(f"Unsupported file type: {file_type}")
                 
+            # After loading data, reinitialize all agents to ensure fresh state
+            api_key = os.getenv("GOOGLE_API_KEY")
+            model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+
+            st.session_state.explorer_agent = DataExplorerAgent(
+                DataExplorerAgentConfig(
+                    api_key=api_key,
+                    model=model_name,
+                    code_execution=True
+                )
+            )
+            st.session_state.feature_engineer_agent = FeatureEngineerAgent(
+                FeatureEngineerAgentConfig(
+                    api_key=api_key,
+                    model=model_name,
+                    code_execution=True
+                )
+            )
+            st.session_state.model_builder_agent = ModelBuilderAgent(
+                ModelBuilderAgentConfig(
+                    api_key=api_key,
+                    model=model_name,
+                    code_execution=True
+                )
+            )
+            
         except Exception as e:
             st.error(f"Error loading file: {str(e)}")
 
@@ -298,6 +431,10 @@ def handle_database_connection() -> None:
                         df = st.session_state.db_connector.get_table_data(selected_table)
                         st.session_state.current_data = df
                         st.session_state.data_source = f"Database table: {selected_table}"
+                        st.session_state.data_source_type = "Database table"
+                        st.session_state.is_data_loaded = True
+                        # Create persistent copies for tab functions
+                        persist_dataframes()
                         st.success(f"Successfully loaded table '{selected_table}'")
                         
                         # Display the full data
@@ -306,18 +443,169 @@ def handle_database_connection() -> None:
     except Exception as e:
         st.error(f"Error accessing database: {str(e)}")
 
-def explore_data(df: pd.DataFrame) -> None:
+    # After loading data, reinitialize all agents to ensure fresh state
+    api_key = os.getenv("GOOGLE_API_KEY")
+    model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+
+    st.session_state.explorer_agent = DataExplorerAgent(
+        DataExplorerAgentConfig(
+            api_key=api_key,
+            model=model_name,
+            code_execution=True
+        )
+    )
+    st.session_state.feature_engineer_agent = FeatureEngineerAgent(
+        FeatureEngineerAgentConfig(
+            api_key=api_key,
+            model=model_name,
+            code_execution=True
+        )
+    )
+    st.session_state.model_builder_agent = ModelBuilderAgent(
+        ModelBuilderAgentConfig(
+            api_key=api_key,
+            model=model_name,
+            code_execution=True
+        )
+    )
+
+def display_agent_response(result, temp_dir=TEMP_DIR):
+    """Display the agent's response, execute code blocks, show outputs/plots, and save artifacts."""
+    import re
+    import streamlit as st
+    import matplotlib.pyplot as plt
+    import plotly.graph_objects as go
+    import pandas as pd
+    import pickle
+    import uuid
+    import datetime
+
+    response = result.get("response", "")
+    code_blocks = []
+    summary_parts = []
+    in_code = False
+    current_code = []
+    for line in response.splitlines():
+        if line.strip().startswith("```"):
+            if in_code:
+                code_blocks.append("\n".join(current_code))
+                current_code = []
+            in_code = not in_code
+        elif in_code:
+            current_code.append(line)
+        else:
+            summary_parts.append(line)
+    # Show summary
+    summary = "\n".join(summary_parts).strip()
+    if summary:
+        st.markdown(summary)
+    # Execute and display code blocks
+    for idx, code in enumerate(code_blocks):
+        st.code(code, language="python")
+        # Save code block
+        code_filename = os.path.join(temp_dir, f"code_block_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}.py")
+        with open(code_filename, "w") as f:
+            f.write(code)
+        st.info(f"Code block saved to: {code_filename}")
+        try:
+            exec_result = result.get("locals", {})
+            local_vars = dict(exec_result)
+            if "df" in result.get("locals", {}):
+                local_vars["df"] = result["locals"]["df"]
+            import io, sys
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            old_stdout, old_stderr = sys.stdout, sys.stderr
+            sys.stdout, sys.stderr = stdout, stderr
+            try:
+                exec(code, local_vars)
+            finally:
+                sys.stdout, sys.stderr = old_stdout, old_stderr
+            output = stdout.getvalue()
+            if output:
+                st.text(output)
+            # Show and save any DataFrames created
+            for name, value in local_vars.items():
+                if isinstance(value, pd.DataFrame) and name != "df":
+                    st.subheader(f"DataFrame: {name}")
+                    # Sanitize before display
+                    sanitized_df = sanitize_dataframe(value)
+                    st.dataframe(sanitized_df)
+                    # Save DataFrame as CSV
+                    csv_filename = os.path.join(temp_dir, f"{name}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}.csv")
+                    value.to_csv(csv_filename, index=False)
+                    st.info(f"DataFrame '{name}' saved to: {csv_filename}")
+            # Show and save matplotlib plots
+            if "plt" in local_vars:
+                plt = local_vars["plt"]
+                if plt.get_fignums():
+                    st.pyplot(plt.gcf())
+                    # Save plot as PNG
+                    plot_filename = os.path.join(temp_dir, f"matplotlib_plot_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}.png")
+                    plt.savefig(plot_filename)
+                    st.info(f"Matplotlib plot saved to: {plot_filename}")
+                    plt.close('all')
+            # Show and save plotly figures
+            for name, value in local_vars.items():
+                if isinstance(value, go.Figure):
+                    st.plotly_chart(value)
+                    plotly_filename = os.path.join(temp_dir, f"plotly_{name}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}.html")
+                    value.write_html(plotly_filename)
+                    st.info(f"Plotly figure '{name}' saved to: {plotly_filename}")
+            # Save any pickled objects
+            for name, value in local_vars.items():
+                if hasattr(value, "__module__") and ("sklearn" in value.__module__ or "xgboost" in value.__module__ or "lightgbm" in value.__module__):
+                    pickle_filename = os.path.join(temp_dir, f"{name}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}.pkl")
+                    with open(pickle_filename, "wb") as pf:
+                        pickle.dump(value, pf)
+                    st.info(f"Pickled object '{name}' saved to: {pickle_filename}")
+        except Exception as e:
+            st.error(f"Error executing code block: {e}")
+
+def get_current_df():
+    """Get the current dataframe from session state, with fallback to function-specific copies."""
+    # First check if is_data_loaded flag is True
+    if not st.session_state.is_data_loaded:
+        st.error("No dataset loaded. Please load data first.")
+        return None
+    
+    # Try to get the main dataframe
+    df = st.session_state.get("current_data", None)
+    
+    # If the main dataframe is missing, try to get function-specific copies
+    if df is None or (hasattr(df, 'empty') and df.empty):
+        # Try feature engineering dataframe
+        df = st.session_state.get("feature_engineering_df", None)
+        if df is not None and not (hasattr(df, 'empty') and df.empty):
+            st.warning("Restored data from feature engineering cache.")
+        else:
+            # Try modeling dataframe
+            df = st.session_state.get("modeling_df", None)
+            if df is not None and not (hasattr(df, 'empty') and df.empty):
+                st.warning("Restored data from modeling cache.")
+            else:
+                # Try exploration dataframe
+                df = st.session_state.get("exploration_df", None)
+                if df is not None and not (hasattr(df, 'empty') and df.empty):
+                    st.warning("Restored data from exploration cache.")
+    
+    # If we still couldn't find a valid dataframe, reset state and show error
+    if df is None or (hasattr(df, 'empty') and df.empty):
+        st.error("Dataset was lost. Please reload data.")
+        st.session_state.is_data_loaded = False  # Reset flag since data is invalid
+        return None
+    
+    # Sanitize the dataframe to avoid Arrow errors
+    df = sanitize_dataframe(df)
+    
+    return df
+
+def explore_data():
     """Explore data with the agent."""
     st.subheader("Exploratory Data Analysis")
-    
+    df = get_current_df()
     if df is None:
-        st.warning("Please load data first")
         return
-    
-    # Initialize agents if needed
-    if st.session_state.explorer_agent is None:
-        if not initialize_agents():
-            return
     
     # Show data source and shape
     st.info(f"Data Source: {st.session_state.data_source}")
@@ -350,22 +638,7 @@ def explore_data(df: pd.DataFrame) -> None:
                 try:
                     # Pass the current dataframe to the agent
                     result = st.session_state.explorer_agent.run(query, data=df)
-                    
-                    # Display the chat history
-                    for message in result.get("chat_history", []):
-                        if message["role"] == "user":
-                            display_chat_message("user", message["content"])
-                        else:
-                            display_chat_message("assistant", message["content"])
-                    
-                    # Display figures if any
-                    figures = []
-                    locals_dict = result.get("locals", {})
-                    for name, value in locals_dict.items():
-                        if isinstance(value, pd.DataFrame) and len(value) < 1000:
-                            st.subheader(f"DataFrame: {name}")
-                            st.dataframe(value)
-                    
+                    display_agent_response(result)
                 except Exception as e:
                     st.error(f"Error running analysis: {str(e)}")
     
@@ -378,14 +651,7 @@ def explore_data(df: pd.DataFrame) -> None:
                         "Please provide a comprehensive summary of this dataset, including data types, missing values, and basic statistics.",
                         data=df
                     )
-                    
-                    # Display the chat history
-                    for message in result.get("chat_history", []):
-                        if message["role"] == "user":
-                            display_chat_message("user", message["content"])
-                        else:
-                            display_chat_message("assistant", message["content"])
-                    
+                    display_agent_response(result)
                 except Exception as e:
                     st.error(f"Error generating data summary: {str(e)}")
     
@@ -398,14 +664,7 @@ def explore_data(df: pd.DataFrame) -> None:
                         "Please analyze the missing values in this dataset, including their distribution and potential impact.",
                         data=df
                     )
-                    
-                    # Display the chat history
-                    for message in result.get("chat_history", []):
-                        if message["role"] == "user":
-                            display_chat_message("user", message["content"])
-                        else:
-                            display_chat_message("assistant", message["content"])
-                    
+                    display_agent_response(result)
                 except Exception as e:
                     st.error(f"Error analyzing missing values: {str(e)}")
     
@@ -418,14 +677,7 @@ def explore_data(df: pd.DataFrame) -> None:
                         "Please analyze the distributions of variables in this dataset, including histograms and summary statistics.",
                         data=df
                     )
-                    
-                    # Display the chat history
-                    for message in result.get("chat_history", []):
-                        if message["role"] == "user":
-                            display_chat_message("user", message["content"])
-                        else:
-                            display_chat_message("assistant", message["content"])
-                    
+                    display_agent_response(result)
                 except Exception as e:
                     st.error(f"Error analyzing distributions: {str(e)}")
     
@@ -438,14 +690,7 @@ def explore_data(df: pd.DataFrame) -> None:
                         "Please analyze the correlations between variables in this dataset, including visualizations and key findings.",
                         data=df
                     )
-                    
-                    # Display the chat history
-                    for message in result.get("chat_history", []):
-                        if message["role"] == "user":
-                            display_chat_message("user", message["content"])
-                        else:
-                            display_chat_message("assistant", message["content"])
-                    
+                    display_agent_response(result)
                 except Exception as e:
                     st.error(f"Error analyzing correlations: {str(e)}")
     
@@ -458,14 +703,7 @@ def explore_data(df: pd.DataFrame) -> None:
                         "Please analyze the outliers in this dataset, including their identification and potential impact.",
                         data=df
                     )
-                    
-                    # Display the chat history
-                    for message in result.get("chat_history", []):
-                        if message["role"] == "user":
-                            display_chat_message("user", message["content"])
-                        else:
-                            display_chat_message("assistant", message["content"])
-                    
+                    display_agent_response(result)
                 except Exception as e:
                     st.error(f"Error analyzing outliers: {str(e)}")
     
@@ -478,33 +716,24 @@ def explore_data(df: pd.DataFrame) -> None:
                         "Please provide a comprehensive exploratory data analysis report for this dataset, including all relevant visualizations and insights.",
                         data=df
                     )
-                    
-                    # Display the chat history
-                    for message in result.get("chat_history", []):
-                        if message["role"] == "user":
-                            display_chat_message("user", message["content"])
-                        else:
-                            display_chat_message("assistant", message["content"])
-                    
+                    display_agent_response(result)
                 except Exception as e:
                     st.error(f"Error generating full EDA report: {str(e)}")
 
-def engineer_features(df: pd.DataFrame) -> None:
+def engineer_features():
     """Engineer features with the agent."""
     st.subheader("Feature Engineering")
-    
+    df = get_current_df()
     if df is None:
-        st.warning("Please load data first")
         return
-    
-    # Initialize agents if needed
-    if st.session_state.feature_engineer_agent is None:
-        if not initialize_agents():
-            return
     
     # Show data source and shape
     st.info(f"Data Source: {st.session_state.data_source}")
     st.info(f"Data Shape: {df.shape}")
+    
+    # Display the current data
+    st.subheader("Current Dataset")
+    display_dataframe(df)
     
     # Analysis options
     engineering_type = st.selectbox(
@@ -527,14 +756,33 @@ def engineer_features(df: pd.DataFrame) -> None:
         if st.button("Run Custom Feature Engineering"):
             with st.spinner("Engineering features..."):
                 try:
+                    # Verify data is valid before proceeding
+                    if not verify_data(df, "custom feature engineering"):
+                        return
+                        
+                    # Get a fresh copy from session state to avoid any issues
+                    if st.session_state.get("feature_engineering_df") is not None:
+                        df = st.session_state.feature_engineering_df.copy()
+                    
+                    # Make sure the dataframe is sanitized
+                    df = sanitize_dataframe(df)
+                    
+                    # CRITICAL: Directly set the dataframe in the agent's code generator
+                    st.session_state.feature_engineer_agent.code_generator.locals_dict["df"] = df
+                    
                     result = st.session_state.feature_engineer_agent.custom_feature_engineering(df, query)
                     
-                    # Display the chat history
-                    for message in result.get("chat_history", []):
-                        if message["role"] == "user":
-                            display_chat_message("user", message["content"])
+                    # Log the error message if any
+                    if not result.get("success", False):
+                        st.error(f"Agent error: {result.get('response', 'Unknown error')}")
+                        # Check what's in the agent's locals dict
+                        agent_df = st.session_state.feature_engineer_agent.code_generator.locals_dict.get("df")
+                        if agent_df is None:
+                            st.error("Agent lost reference to the DataFrame")
                         else:
-                            display_chat_message("assistant", message["content"])
+                            st.info(f"Agent DataFrame shape: {agent_df.shape}")
+                            
+                    display_agent_response(result)
                     
                     # Store engineered data if available
                     locals_dict = result.get("locals", {})
@@ -562,28 +810,140 @@ def engineer_features(df: pd.DataFrame) -> None:
         if st.button("Run Basic Feature Engineering"):
             with st.spinner("Engineering features..."):
                 try:
-                    result = st.session_state.feature_engineer_agent.engineer_features(df, target_variable)
+                    # Verify data is valid before proceeding
+                    if not verify_data(df, "feature engineering"):
+                        return
                     
-                    # Display the chat history
-                    for message in result.get("chat_history", []):
-                        if message["role"] == "user":
-                            display_chat_message("user", message["content"])
+                    # Get a fresh copy from session state to avoid any issues
+                    if st.session_state.get("feature_engineering_df") is not None:
+                        df = st.session_state.feature_engineering_df.copy()
+                    
+                    # Make sure the dataframe is sanitized
+                    df = sanitize_dataframe(df)
+                    
+                    # Add progress indicator
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    
+                    # Update progress
+                    progress_bar.progress(10)
+                    status_text.text("Preparing data...")
+                    
+                    # CRITICAL: Directly set the dataframe in the agent's code generator
+                    st.session_state.feature_engineer_agent.code_generator.locals_dict["df"] = df
+                    
+                    # Update progress
+                    progress_bar.progress(30)
+                    status_text.text("Sending request to LLM...")
+                    
+                    # Implement a simple timeout for the LLM call
+                    import concurrent.futures
+                    
+                    def run_with_timeout(func, *args, timeout=120, **kwargs):
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            future = executor.submit(func, *args, **kwargs)
+                            try:
+                                return future.result(timeout=timeout)
+                            except concurrent.futures.TimeoutError:
+                                return {"success": False, "response": "LLM request timed out after 120 seconds. Please try again or try with a simpler request."}
+                    
+                    # Run the feature engineering with timeout
+                    result = run_with_timeout(
+                        st.session_state.feature_engineer_agent.engineer_features,
+                        df, target_variable, timeout=120
+                    )
+                    
+                    # Update progress
+                    progress_bar.progress(80)
+                    status_text.text("Processing response...")
+                    
+                    # Log the error message if any
+                    if not result.get("success", False):
+                        st.error(f"Agent error: {result.get('response', 'Unknown error')}")
+                        # Check what's in the agent's locals dict
+                        agent_df = st.session_state.feature_engineer_agent.code_generator.locals_dict.get("df")
+                        if agent_df is None:
+                            st.error("Agent lost reference to the DataFrame")
                         else:
-                            display_chat_message("assistant", message["content"])
-                    
-                    # Store engineered data if available
-                    locals_dict = result.get("locals", {})
-                    for name, value in locals_dict.items():
-                        if isinstance(value, pd.DataFrame) and name != "df":
-                            st.success(f"Engineered data available as DataFrame: {name}")
-                            st.session_state.engineered_data = value
+                            st.info(f"Agent DataFrame shape: {agent_df.shape}")
                             
-                            # Display the engineered data
-                            st.subheader("Engineered Data Preview")
-                            display_dataframe(value)
+                        # Direct fallback to basic feature engineering implementation if the agent fails
+                        st.warning("Attempting fallback to basic feature engineering implementation...")
+                        
+                        try:
+                            engineered_df = df.copy()
+                            
+                            # Generate basic numeric features
+                            numeric_cols = df.select_dtypes(include=['int64', 'float64']).columns
+                            if len(numeric_cols) > 0:
+                                # Log transformations
+                                for col in numeric_cols:
+                                    if (df[col] > 0).all():
+                                        engineered_df[f'{col}_log'] = np.log(df[col])
+                                
+                                # Square and square root transformations
+                                for col in numeric_cols:
+                                    engineered_df[f'{col}_squared'] = df[col] ** 2
+                                    if (df[col] >= 0).all():
+                                        engineered_df[f'{col}_sqrt'] = np.sqrt(df[col])
+                                
+                                # Interactions between numeric features (up to 5 combinations to avoid explosion)
+                                if len(numeric_cols) >= 2:
+                                    import itertools
+                                    for col1, col2 in list(itertools.combinations(numeric_cols, 2))[:5]:
+                                        engineered_df[f'{col1}_times_{col2}'] = df[col1] * df[col2]
+                                        engineered_df[f'{col1}_by_{col2}'] = df[col1] / df[col2].replace(0, np.nan)
+                            
+                            # One-hot encode categorical features
+                            categorical_cols = df.select_dtypes(include=['object', 'category']).columns
+                            if len(categorical_cols) > 0:
+                                for col in categorical_cols:
+                                    if df[col].nunique() < 10:  # Only one-hot encode if fewer than 10 categories
+                                        dummies = pd.get_dummies(df[col], prefix=col, drop_first=True)
+                                        engineered_df = pd.concat([engineered_df, dummies], axis=1)
+                            
+                            # Drop columns with too many NaN values
+                            engineered_df = engineered_df.dropna(axis=1, thresh=len(engineered_df) * 0.8)
+                            
+                            # Display results
+                            st.success("Fallback feature engineering completed successfully")
+                            st.subheader("Feature Engineering Result")
+                            display_dataframe(engineered_df)
+                            
+                            # Show feature counts
+                            st.subheader("Feature Summary")
+                            st.write(f"Original features: {df.shape[1]}")
+                            st.write(f"New features: {engineered_df.shape[1]}")
+                            st.write(f"Added features: {engineered_df.shape[1] - df.shape[1]}")
+                            
+                            # Save the result
+                            st.session_state.engineered_data = engineered_df
+                            
+                        except Exception as e:
+                            st.error(f"Fallback feature engineering failed: {str(e)}")
+                    else:
+                        # If successful, store engineered data if available
+                        locals_dict = result.get("locals", {})
+                        for name, value in locals_dict.items():
+                            if isinstance(value, pd.DataFrame) and name != "df":
+                                st.success(f"Engineered data available as DataFrame: {name}")
+                                st.session_state.engineered_data = value
+                                
+                                # Display the engineered data
+                                st.subheader("Engineered Data Preview")
+                                display_dataframe(value)
+                    
+                    # Complete progress
+                    progress_bar.progress(100)
+                    status_text.text("Complete!")
+                    
+                    # Display the agent's response
+                    display_agent_response(result)
                     
                 except Exception as e:
                     st.error(f"Error engineering features: {str(e)}")
+                    import traceback
+                    st.error(traceback.format_exc())
     
     elif engineering_type == "Encode Categorical Features":
         # Allow selection of categorical columns
@@ -599,13 +959,7 @@ def engineer_features(df: pd.DataFrame) -> None:
             with st.spinner("Encoding categorical features..."):
                 try:
                     result = st.session_state.feature_engineer_agent.encode_categorical_features(df, categorical_columns)
-                    
-                    # Display the chat history
-                    for message in result.get("chat_history", []):
-                        if message["role"] == "user":
-                            display_chat_message("user", message["content"])
-                        else:
-                            display_chat_message("assistant", message["content"])
+                    display_agent_response(result)
                     
                     # Store engineered data if available
                     locals_dict = result.get("locals", {})
@@ -635,13 +989,7 @@ def engineer_features(df: pd.DataFrame) -> None:
             with st.spinner("Normalizing features..."):
                 try:
                     result = st.session_state.feature_engineer_agent.normalize_features(df, numeric_columns)
-                    
-                    # Display the chat history
-                    for message in result.get("chat_history", []):
-                        if message["role"] == "user":
-                            display_chat_message("user", message["content"])
-                        else:
-                            display_chat_message("assistant", message["content"])
+                    display_agent_response(result)
                     
                     # Store engineered data if available
                     locals_dict = result.get("locals", {})
@@ -668,13 +1016,7 @@ def engineer_features(df: pd.DataFrame) -> None:
             with st.spinner("Selecting features..."):
                 try:
                     result = st.session_state.feature_engineer_agent.select_features(df, target_variable, n_features)
-                    
-                    # Display the chat history
-                    for message in result.get("chat_history", []):
-                        if message["role"] == "user":
-                            display_chat_message("user", message["content"])
-                        else:
-                            display_chat_message("assistant", message["content"])
+                    display_agent_response(result)
                     
                     # Store selected features data if available
                     locals_dict = result.get("locals", {})
@@ -697,28 +1039,124 @@ def engineer_features(df: pd.DataFrame) -> None:
         if st.button("Reduce Dimensionality"):
             with st.spinner("Reducing dimensionality..."):
                 try:
-                    result = st.session_state.feature_engineer_agent.reduce_dimensionality(df, n_components)
+                    # Verify data is valid before proceeding
+                    if not verify_data(df, "dimensionality reduction"):
+                        return
                     
-                    # Display the chat history
-                    for message in result.get("chat_history", []):
-                        if message["role"] == "user":
-                            display_chat_message("user", message["content"])
+                    # Get a fresh copy from session state to avoid any issues
+                    if st.session_state.get("feature_engineering_df") is not None:
+                        df = st.session_state.feature_engineering_df.copy()
+                    
+                    # Make sure the dataframe is sanitized
+                    df = sanitize_dataframe(df)
+                    
+                    # Log info for debugging
+                    st.info(f"Running dimensionality reduction with {n_components} components on data shape {df.shape}")
+                    
+                    # Add progress indicator
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    
+                    # Update progress
+                    progress_bar.progress(10)
+                    status_text.text("Preparing data...")
+                    
+                    # CRITICAL: Directly set the dataframe in the agent's code generator
+                    st.session_state.feature_engineer_agent.code_generator.locals_dict["df"] = df
+                    
+                    # Update progress
+                    progress_bar.progress(30)
+                    status_text.text("Sending request to LLM...")
+                    
+                    # Implement a simple timeout for the LLM call
+                    import concurrent.futures
+                    import time
+                    
+                    def run_with_timeout(func, *args, timeout=120, **kwargs):
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            future = executor.submit(func, *args, **kwargs)
+                            try:
+                                return future.result(timeout=timeout)
+                            except concurrent.futures.TimeoutError:
+                                return {"success": False, "response": "LLM request timed out after 120 seconds. Please try again or try with a simpler request."}
+                    
+                    # Run the dimensionality reduction with timeout
+                    result = run_with_timeout(
+                        st.session_state.feature_engineer_agent.reduce_dimensionality,
+                        df, n_components, timeout=120
+                    )
+                    
+                    # Update progress
+                    progress_bar.progress(80)
+                    status_text.text("Processing response...")
+                    
+                    # Log the error message if any
+                    if not result.get("success", False):
+                        st.error(f"Agent error: {result.get('response', 'Unknown error')}")
+                        # Check what's in the agent's locals dict
+                        agent_df = st.session_state.feature_engineer_agent.code_generator.locals_dict.get("df")
+                        if agent_df is None:
+                            st.error("Agent lost reference to the DataFrame")
                         else:
-                            display_chat_message("assistant", message["content"])
-                    
-                    # Store reduced data if available
-                    locals_dict = result.get("locals", {})
-                    for name, value in locals_dict.items():
-                        if isinstance(value, pd.DataFrame) and name != "df":
-                            st.success(f"Reduced data available as DataFrame: {name}")
-                            st.session_state.engineered_data = value
+                            st.info(f"Agent DataFrame shape: {agent_df.shape}")
                             
-                            # Display the reduced data
-                            st.subheader("Reduced Data Preview")
-                            display_dataframe(value)
+                        # Direct fallback to basic PCA implementation if the agent fails
+                        st.warning("Attempting fallback to basic PCA implementation...")
+                        
+                        try:
+                            from sklearn.decomposition import PCA
+                            from sklearn.preprocessing import StandardScaler
+                            
+                            # Select only numeric columns
+                            numeric_df = df.select_dtypes(include=['int64', 'float64'])
+                            if numeric_df.shape[1] < 2:
+                                st.error("Not enough numeric columns for PCA")
+                                return
+                                
+                            # Scale the data
+                            scaler = StandardScaler()
+                            scaled_data = scaler.fit_transform(numeric_df)
+                            
+                            # Perform PCA
+                            pca = PCA(n_components=min(n_components, numeric_df.shape[1]))
+                            pca_result = pca.fit_transform(scaled_data)
+                            
+                            # Create DataFrame with results
+                            pca_df = pd.DataFrame(
+                                data=pca_result,
+                                columns=[f'PC{i+1}' for i in range(pca_result.shape[1])]
+                            )
+                            
+                            # Add original index
+                            pca_df.index = df.index
+                            
+                            # Display results
+                            st.success("Fallback PCA completed successfully")
+                            st.subheader("PCA Result")
+                            display_dataframe(pca_df)
+                            
+                            # Show variance explained
+                            st.subheader("Variance Explained")
+                            explained_variance = pca.explained_variance_ratio_
+                            st.bar_chart({f'PC{i+1}': var for i, var in enumerate(explained_variance)})
+                            
+                            # Save the result
+                            st.session_state.engineered_data = pca_df
+                            
+                        except Exception as e:
+                            st.error(f"Fallback PCA failed: {str(e)}")
+                    
+                    # Complete progress
+                    progress_bar.progress(100)
+                    status_text.text("Complete!")
+                    
+                    # Display the agent's response
+                    display_agent_response(result)
                     
                 except Exception as e:
                     st.error(f"Error reducing dimensionality: {str(e)}")
+                    import traceback
+                    st.error(traceback.format_exc())
     
     elif engineering_type == "Time Series Features":
         # Get time column
@@ -736,13 +1174,7 @@ def engineer_features(df: pd.DataFrame) -> None:
             with st.spinner("Creating time series features..."):
                 try:
                     result = st.session_state.feature_engineer_agent.handle_time_series_features(df, time_column)
-                    
-                    # Display the chat history
-                    for message in result.get("chat_history", []):
-                        if message["role"] == "user":
-                            display_chat_message("user", message["content"])
-                        else:
-                            display_chat_message("assistant", message["content"])
+                    display_agent_response(result)
                     
                     # Store time series data if available
                     locals_dict = result.get("locals", {})
@@ -761,28 +1193,35 @@ def engineer_features(df: pd.DataFrame) -> None:
     # Option to use engineered data
     if st.session_state.engineered_data is not None:
         if st.button("Use Engineered Data for Modeling"):
-            st.session_state.current_data = st.session_state.engineered_data
-            st.session_state.data_source = f"{st.session_state.data_source} (Engineered)"
-            st.success("Now using engineered data for modeling")
+            # Sanitize the engineered data before storing it
+            sanitized_data = sanitize_dataframe(st.session_state.engineered_data)
+            if sanitized_data is not None:
+                st.session_state.current_data = sanitized_data
+                st.session_state.data_source = f"{st.session_state.data_source} (Engineered)"
+                st.success("Now using engineered data for modeling")
+            else:
+                st.error("Could not use engineered data due to data type issues")
 
-def build_model(df: pd.DataFrame) -> None:
+def build_model():
     """Build model with the agent."""
     st.subheader("Model Building")
-    
+    df = get_current_df()
     if df is None:
-        st.warning("Please load data first")
         return
-    
-    # Initialize agents if needed
-    if st.session_state.model_builder_agent is None:
-        if not initialize_agents():
-            return
     
     # Show data source and shape
     st.info(f"Data Source: {st.session_state.data_source}")
     st.info(f"Data Shape: {df.shape}")
     
+    # Display the current data
+    st.subheader("Current Dataset")
+    display_dataframe(df)
+    
+    # Add a separator
+    st.markdown("---")
+    
     # Modeling options
+    st.subheader("Select Model Options")
     modeling_type = st.selectbox(
         "Select Modeling Type",
         [
@@ -801,23 +1240,30 @@ def build_model(df: pd.DataFrame) -> None:
         if st.button("Run Custom Modeling"):
             with st.spinner("Building model..."):
                 try:
+                    # Verify data is valid before proceeding
+                    if not verify_data(df, "custom modeling"):
+                        return
+                        
+                    # Get a fresh copy from session state to avoid any issues
+                    if st.session_state.get("modeling_df") is not None:
+                        df = st.session_state.modeling_df.copy()
+                        
+                    # Make sure data is sanitized
+                    df = sanitize_dataframe(df)
+                    
+                    # Log info for debugging
+                    st.info(f"Running custom modeling on data shape {df.shape}")
+                    
                     result = st.session_state.model_builder_agent.custom_modeling(df, query)
-                    
-                    # Display the chat history
-                    for message in result.get("chat_history", []):
-                        if message["role"] == "user":
-                            display_chat_message("user", message["content"])
-                        else:
-                            display_chat_message("assistant", message["content"])
-                    
-                    # Store model results
+                    display_agent_response(result)
                     st.session_state.model_results = {
                         "type": "custom",
                         "result": result
                     }
-                    
                 except Exception as e:
                     st.error(f"Error building model: {str(e)}")
+                    import traceback
+                    st.error(traceback.format_exc())
     
     elif modeling_type == "Build Single Model":
         # Get target variable
@@ -837,25 +1283,30 @@ def build_model(df: pd.DataFrame) -> None:
         if st.button("Build Model"):
             with st.spinner("Building model..."):
                 try:
+                    # CRITICAL: Directly set the dataframe in the agent's code generator
+                    st.session_state.model_builder_agent.code_generator.locals_dict["df"] = df
+                    
                     result = st.session_state.model_builder_agent.build_model(
                         df, target_variable, model_type, test_size
                     )
                     
-                    # Display the chat history
-                    for message in result.get("chat_history", []):
-                        if message["role"] == "user":
-                            display_chat_message("user", message["content"])
+                    # Log the error message if any
+                    if not result.get("success", False):
+                        st.error(f"Agent error: {result.get('response', 'Unknown error')}")
+                        # Check what's in the agent's locals dict
+                        agent_df = st.session_state.model_builder_agent.code_generator.locals_dict.get("df")
+                        if agent_df is None:
+                            st.error("Agent lost reference to the DataFrame")
                         else:
-                            display_chat_message("assistant", message["content"])
+                            st.info(f"Agent DataFrame shape: {agent_df.shape}")
                     
-                    # Store model results
+                    display_agent_response(result)
                     st.session_state.model_results = {
                         "type": "single_model",
                         "target": target_variable,
                         "model_type": model_type,
                         "result": result
                     }
-                    
                 except Exception as e:
                     st.error(f"Error building model: {str(e)}")
     
@@ -880,22 +1331,13 @@ def build_model(df: pd.DataFrame) -> None:
                     result = st.session_state.model_builder_agent.compare_models(
                         df, target_variable, model_type, test_size
                     )
-                    
-                    # Display the chat history
-                    for message in result.get("chat_history", []):
-                        if message["role"] == "user":
-                            display_chat_message("user", message["content"])
-                        else:
-                            display_chat_message("assistant", message["content"])
-                    
-                    # Store model results
+                    display_agent_response(result)
                     st.session_state.model_results = {
                         "type": "compare_models",
                         "target": target_variable,
                         "model_type": model_type,
                         "result": result
                     }
-                    
                 except Exception as e:
                     st.error(f"Error comparing models: {str(e)}")
     
@@ -918,22 +1360,13 @@ def build_model(df: pd.DataFrame) -> None:
                     result = st.session_state.model_builder_agent.tune_hyperparameters(
                         df, target_variable, model_type, test_size
                     )
-                    
-                    # Display the chat history
-                    for message in result.get("chat_history", []):
-                        if message["role"] == "user":
-                            display_chat_message("user", message["content"])
-                        else:
-                            display_chat_message("assistant", message["content"])
-                    
-                    # Store model results
+                    display_agent_response(result)
                     st.session_state.model_results = {
                         "type": "tune_hyperparameters",
                         "target": target_variable,
                         "model_type": model_type,
                         "result": result
                     }
-                    
                 except Exception as e:
                     st.error(f"Error tuning hyperparameters: {str(e)}")
     
@@ -956,24 +1389,44 @@ def build_model(df: pd.DataFrame) -> None:
                     result = st.session_state.model_builder_agent.cross_validation(
                         df, target_variable, model_type, n_splits
                     )
-                    
-                    # Display the chat history
-                    for message in result.get("chat_history", []):
-                        if message["role"] == "user":
-                            display_chat_message("user", message["content"])
-                        else:
-                            display_chat_message("assistant", message["content"])
-                    
-                    # Store model results
+                    display_agent_response(result)
                     st.session_state.model_results = {
                         "type": "cross_validation",
                         "target": target_variable,
                         "model_type": model_type,
                         "result": result
                     }
-                    
                 except Exception as e:
                     st.error(f"Error running cross-validation: {str(e)}")
+
+def verify_data(df, action_name="this action"):
+    """Verify that data exists and is valid before running agents."""
+    if df is None:
+        st.error(f"No valid dataset found for {action_name}. Please reload your data.")
+        return False
+    
+    # Make a copy to avoid modifying the original
+    df_copy = df.copy()
+    
+    # Quick check for common data issues
+    try:
+        # Check for at least some rows and columns
+        if df_copy.shape[0] == 0 or df_copy.shape[1] == 0:
+            st.error(f"Dataset is empty (shape: {df_copy.shape}). Please reload your data.")
+            return False
+            
+        # Check for all NaN values
+        if df_copy.isna().all().all():
+            st.error("Dataset contains only missing values. Please check your data.")
+            return False
+            
+        # Check for infinite values and replace with NaN to avoid errors
+        df_copy.replace([np.inf, -np.inf], np.nan, inplace=True)
+        
+        return True
+    except Exception as e:
+        st.error(f"Error verifying data: {str(e)}")
+        return False
 
 def main():
     """Main function to run the Streamlit app."""
@@ -1002,26 +1455,47 @@ def main():
     
     # Main content
     tabs = st.tabs(["Load Data", "Explore Data", "Engineer Features", "Build Models"])
-    
-    with tabs[0]:
-        st.header("Load Data")
-        
-        # Choose data source
-        data_source = st.radio("Choose a data source", ["Upload File", "Connect to Database"])
-        
-        if data_source == "Upload File":
-            handle_file_upload()
-        else:
-            handle_database_connection()
-    
-    with tabs[1]:
-        explore_data(st.session_state.current_data)
-    
-    with tabs[2]:
-        engineer_features(st.session_state.current_data)
-    
-    with tabs[3]:
-        build_model(st.session_state.current_data)
+
+    # Check if data is already loaded
+    if st.session_state.is_data_loaded:
+        with tabs[0]:
+            st.header("Load Data")
+            st.info(f"Data already loaded from: {st.session_state.data_source}")
+            display_dataframe(st.session_state.current_data) # Display the loaded data
+            
+            # Create copies of the data for each tab function to prevent state loss
+            persist_dataframes()
+
+        # Proceed to other tabs as data is available
+        with tabs[1]:
+            explore_data()
+
+        with tabs[2]:
+            engineer_features()
+
+        with tabs[3]:
+            build_model()
+
+    else:
+        # If no data loaded, only show the Load Data tab initially
+        with tabs[0]:
+            st.header("Load Data")
+
+            # Choose data source
+            data_source = st.radio("Choose a data source", ["Upload File", "Connect to Database"])
+
+            if data_source == "Upload File":
+                handle_file_upload()
+            else:
+                handle_database_connection()
+
+        # Inform the user to load data first for other tabs
+        with tabs[1]:
+            st.info("Please load data in the 'Load Data' tab to proceed with data exploration.")
+        with tabs[2]:
+            st.info("Please load data in the 'Load Data' tab to proceed with feature engineering.")
+        with tabs[3]:
+            st.info("Please load data in the 'Load Data' tab to proceed with model building.")
 
 if __name__ == "__main__":
     main() 

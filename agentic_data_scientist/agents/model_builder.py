@@ -45,29 +45,13 @@ class ModelBuilderAgent(BaseAgent):
         """
         super().__init__(config)
     
-    def build_model(self, 
-                    data: pd.DataFrame, 
-                    target_variable: str,
-                    model_type: Optional[str] = None,
-                    test_size: float = 0.2,
-                    random_state: int = 42) -> Dict[str, Any]:
-        """Build a model for a dataset.
-        
-        Args:
-            data: DataFrame to build a model for.
-            target_variable: Target variable name.
-            model_type: Optional model type ('classification', 'regression', 'clustering', etc.).
-            test_size: Size of the test set (default: 0.2).
-            random_state: Random state for reproducibility (default: 42).
-            
-        Returns:
-            Results with the trained model.
-        """
+    def build_model(self, df: pd.DataFrame, target_variable, model_type=None, test_size=0.2):
+        if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+            return {"success": False, "response": "No dataset provided. Please load a dataset first.", "chat_history": self.chat_history}
         # Add the data to the code generator
-        self.code_generator.locals_dict["df"] = data
+        self.code_generator.locals_dict["df"] = df
         self.code_generator.locals_dict["target_variable"] = target_variable
         self.code_generator.locals_dict["test_size"] = test_size
-        self.code_generator.locals_dict["random_state"] = random_state
         
         # Construct the query
         query = f"Please build a machine learning model to predict '{target_variable}'. "
@@ -76,39 +60,23 @@ class ModelBuilderAgent(BaseAgent):
             query += f"This is a {model_type} task. "
         
         query += (
-            f"Split the data into training and testing sets (test_size={test_size}, random_state={random_state}). "
+            f"Split the data into training and testing sets (test_size={test_size}). "
             "Select an appropriate model, train it, and evaluate its performance using appropriate metrics. "
             "Provide visualizations of the model's performance and feature importance if applicable."
         )
         
-        # Run the model building query
-        result = self.run(query)
+        # Run the model building query - explicitly pass df as data parameter
+        result = self.run(query, data=df)
         
         return result
     
-    def compare_models(self, 
-                       data: pd.DataFrame, 
-                       target_variable: str,
-                       model_type: Optional[str] = None,
-                       test_size: float = 0.2,
-                       random_state: int = 42) -> Dict[str, Any]:
-        """Compare multiple models for a dataset.
-        
-        Args:
-            data: DataFrame to build models for.
-            target_variable: Target variable name.
-            model_type: Optional model type ('classification', 'regression', 'clustering', etc.).
-            test_size: Size of the test set (default: 0.2).
-            random_state: Random state for reproducibility (default: 42).
-            
-        Returns:
-            Results with the compared models.
-        """
+    def compare_models(self, df: pd.DataFrame, target_variable, model_type=None, test_size=0.2):
+        if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+            return {"success": False, "response": "No dataset provided. Please load a dataset first.", "chat_history": self.chat_history}
         # Add the data to the code generator
-        self.code_generator.locals_dict["df"] = data
+        self.code_generator.locals_dict["df"] = df
         self.code_generator.locals_dict["target_variable"] = target_variable
         self.code_generator.locals_dict["test_size"] = test_size
-        self.code_generator.locals_dict["random_state"] = random_state
         
         # Construct the query
         query = f"Please compare multiple machine learning models to predict '{target_variable}'. "
@@ -117,49 +85,34 @@ class ModelBuilderAgent(BaseAgent):
             query += f"This is a {model_type} task. "
         
         query += (
-            f"Split the data into training and testing sets (test_size={test_size}, random_state={random_state}). "
+            f"Split the data into training and testing sets (test_size={test_size}). "
             "Try at least 3 different models (e.g., Random Forest, XGBoost, LightGBM, etc.), train them, and compare "
             "their performance using appropriate metrics. Create visualizations to compare the models and identify "
             "the best performing one. Explain the strengths and weaknesses of each model."
         )
         
-        # Run the model comparison query
-        result = self.run(query)
+        # Run the model comparison query - explicitly pass df as data parameter
+        result = self.run(query, data=df)
         
         return result
     
-    def tune_hyperparameters(self, 
-                            data: pd.DataFrame, 
-                            target_variable: str,
-                            model_type: str,
-                            test_size: float = 0.2,
-                            random_state: int = 42) -> Dict[str, Any]:
-        """Tune hyperparameters for a model.
-        
-        Args:
-            data: DataFrame to tune hyperparameters for.
-            target_variable: Target variable name.
-            model_type: Model type (e.g., 'RandomForest', 'XGBoost', 'LightGBM', etc.).
-            test_size: Size of the test set (default: 0.2).
-            random_state: Random state for reproducibility (default: 42).
-            
-        Returns:
-            Results with the tuned model.
-        """
+    def tune_hyperparameters(self, df: pd.DataFrame, target_variable, model_type, test_size=0.2):
+        if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+            return {"success": False, "response": "No dataset provided. Please load a dataset first.", "chat_history": self.chat_history}
         # Add the data to the code generator
-        self.code_generator.locals_dict["df"] = data
+        self.code_generator.locals_dict["df"] = df
         self.code_generator.locals_dict["target_variable"] = target_variable
         self.code_generator.locals_dict["model_type"] = model_type
         self.code_generator.locals_dict["test_size"] = test_size
-        self.code_generator.locals_dict["random_state"] = random_state
         
-        # Run the hyperparameter tuning query
+        # Run the hyperparameter tuning query - explicitly pass df as data parameter
         result = self.run(
             f"Please tune the hyperparameters for a {model_type} model to predict '{target_variable}'. "
-            f"Split the data into training and testing sets (test_size={test_size}, random_state={random_state}). "
+            f"Split the data into training and testing sets (test_size={test_size}). "
             "Use an appropriate hyperparameter tuning method (e.g., GridSearchCV, RandomizedSearchCV, Bayesian optimization, etc.). "
             "Evaluate the tuned model's performance and compare it with a baseline model. "
-            "Explain the impact of different hyperparameters on the model's performance."
+            "Explain the impact of different hyperparameters on the model's performance.",
+            data=df
         )
         
         return result
@@ -233,55 +186,33 @@ class ModelBuilderAgent(BaseAgent):
         
         return result
     
-    def cross_validation(self, 
-                        data: pd.DataFrame, 
-                        target_variable: str,
-                        model_type: str,
-                        n_splits: int = 5,
-                        random_state: int = 42) -> Dict[str, Any]:
-        """Perform cross-validation for a model.
-        
-        Args:
-            data: DataFrame to perform cross-validation on.
-            target_variable: Target variable name.
-            model_type: Model type (e.g., 'RandomForest', 'XGBoost', 'LightGBM', etc.).
-            n_splits: Number of cross-validation splits (default: 5).
-            random_state: Random state for reproducibility (default: 42).
-            
-        Returns:
-            Results with the cross-validation.
-        """
+    def cross_validation(self, df: pd.DataFrame, target_variable, model_type, n_splits=5):
+        if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+            return {"success": False, "response": "No dataset provided. Please load a dataset first.", "chat_history": self.chat_history}
         # Add the data to the code generator
-        self.code_generator.locals_dict["df"] = data
+        self.code_generator.locals_dict["df"] = df
         self.code_generator.locals_dict["target_variable"] = target_variable
         self.code_generator.locals_dict["model_type"] = model_type
         self.code_generator.locals_dict["n_splits"] = n_splits
-        self.code_generator.locals_dict["random_state"] = random_state
         
-        # Run the cross-validation query
+        # Run the cross-validation query - explicitly pass df as data parameter
         result = self.run(
             f"Please perform {n_splits}-fold cross-validation for a {model_type} model to predict '{target_variable}'. "
             "Calculate appropriate evaluation metrics for each fold and the overall model performance. "
             "Visualize the distribution of the evaluation metrics across folds and discuss the model's stability. "
-            "Provide insights into the model's performance and any potential issues with the data."
+            "Provide insights into the model's performance and any potential issues with the data.",
+            data=df
         )
         
         return result
     
-    def custom_modeling(self, data: pd.DataFrame, query: str) -> Dict[str, Any]:
-        """Perform custom modeling tasks.
-        
-        Args:
-            data: DataFrame to perform modeling on.
-            query: Custom modeling query.
-            
-        Returns:
-            Results with the custom modeling.
-        """
+    def custom_modeling(self, df: pd.DataFrame, query: str):
+        if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+            return {"success": False, "response": "No dataset provided. Please load a dataset first.", "chat_history": self.chat_history}
         # Add the data to the code generator
-        self.code_generator.locals_dict["df"] = data
+        self.code_generator.locals_dict["df"] = df
         
-        # Run the custom modeling query
-        result = self.run(query)
+        # Run the custom modeling query - explicitly pass df as data parameter
+        result = self.run(query, data=df)
         
         return result 

@@ -44,18 +44,20 @@ class FeatureEngineerAgent(BaseAgent):
         """
         super().__init__(config)
     
-    def engineer_features(self, data: pd.DataFrame, target_variable: Optional[str] = None) -> Dict[str, Any]:
+    def engineer_features(self, df: pd.DataFrame, target_variable=None) -> Dict[str, Any]:
         """Engineer features for a dataset.
         
         Args:
-            data: DataFrame to engineer features for.
+            df: DataFrame to engineer features for.
             target_variable: Optional target variable name.
             
         Returns:
             Results with engineered features.
         """
+        if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+            return {"success": False, "response": "No dataset provided. Please load a dataset first.", "chat_history": self.chat_history}
         # Add the data to the code generator
-        self.code_generator.locals_dict["df"] = data
+        self.code_generator.locals_dict["df"] = df
         
         query = (
             "Please engineer appropriate features for this dataset to improve machine learning model performance. "
@@ -67,23 +69,25 @@ class FeatureEngineerAgent(BaseAgent):
             self.code_generator.locals_dict["target_variable"] = target_variable
             query += f" The target variable is '{target_variable}'."
         
-        # Run the feature engineering query
-        result = self.run(query)
+        # Run the feature engineering query - explicitly pass df as data parameter
+        result = self.run(query, data=df)
         
         return result
     
-    def encode_categorical_features(self, data: pd.DataFrame, categorical_columns: Optional[List[str]] = None) -> Dict[str, Any]:
+    def encode_categorical_features(self, df: pd.DataFrame, categorical_columns=None) -> Dict[str, Any]:
         """Encode categorical features.
         
         Args:
-            data: DataFrame to encode features for.
+            df: DataFrame to encode features for.
             categorical_columns: Optional list of categorical column names.
             
         Returns:
             Results with encoded features.
         """
+        if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+            return {"success": False, "response": "No dataset provided. Please load a dataset first.", "chat_history": self.chat_history}
         # Add the data to the code generator
-        self.code_generator.locals_dict["df"] = data
+        self.code_generator.locals_dict["df"] = df
         
         query = (
             "Please encode the categorical features in this dataset using appropriate encoding methods "
@@ -95,23 +99,25 @@ class FeatureEngineerAgent(BaseAgent):
             self.code_generator.locals_dict["categorical_columns"] = categorical_columns
             query += f" The categorical columns are: {categorical_columns}."
         
-        # Run the categorical encoding query
-        result = self.run(query)
+        # Run the categorical encoding query - explicitly pass df as data parameter
+        result = self.run(query, data=df)
         
         return result
     
-    def normalize_features(self, data: pd.DataFrame, numeric_columns: Optional[List[str]] = None) -> Dict[str, Any]:
+    def normalize_features(self, df: pd.DataFrame, numeric_columns=None) -> Dict[str, Any]:
         """Normalize or standardize numeric features.
         
         Args:
-            data: DataFrame to normalize features for.
+            df: DataFrame to normalize features for.
             numeric_columns: Optional list of numeric column names.
             
         Returns:
             Results with normalized features.
         """
+        if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+            return {"success": False, "response": "No dataset provided. Please load a dataset first.", "chat_history": self.chat_history}
         # Add the data to the code generator
-        self.code_generator.locals_dict["df"] = data
+        self.code_generator.locals_dict["df"] = df
         
         query = (
             "Please normalize or standardize the numeric features in this dataset using appropriate methods "
@@ -123,24 +129,26 @@ class FeatureEngineerAgent(BaseAgent):
             self.code_generator.locals_dict["numeric_columns"] = numeric_columns
             query += f" The numeric columns are: {numeric_columns}."
         
-        # Run the normalization query
-        result = self.run(query)
+        # Run the normalization query - explicitly pass df as data parameter
+        result = self.run(query, data=df)
         
         return result
     
-    def select_features(self, data: pd.DataFrame, target_variable: str, n_features: Optional[int] = None) -> Dict[str, Any]:
+    def select_features(self, df: pd.DataFrame, target_variable, n_features) -> Dict[str, Any]:
         """Select important features.
         
         Args:
-            data: DataFrame to select features from.
+            df: DataFrame to select features from.
             target_variable: Target variable name.
             n_features: Optional number of features to select.
             
         Returns:
             Results with selected features.
         """
+        if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+            return {"success": False, "response": "No dataset provided. Please load a dataset first.", "chat_history": self.chat_history}
         # Add the data to the code generator
-        self.code_generator.locals_dict["df"] = data
+        self.code_generator.locals_dict["df"] = df
         self.code_generator.locals_dict["target_variable"] = target_variable
         
         query = (
@@ -153,23 +161,25 @@ class FeatureEngineerAgent(BaseAgent):
             self.code_generator.locals_dict["n_features"] = n_features
             query += f" Please select approximately {n_features} features."
         
-        # Run the feature selection query
-        result = self.run(query)
+        # Run the feature selection query - explicitly pass df as data parameter
+        result = self.run(query, data=df)
         
         return result
     
-    def reduce_dimensionality(self, data: pd.DataFrame, n_components: Optional[int] = None) -> Dict[str, Any]:
+    def reduce_dimensionality(self, df: pd.DataFrame, n_components) -> Dict[str, Any]:
         """Reduce dimensionality of the dataset.
         
         Args:
-            data: DataFrame to reduce dimensionality for.
+            df: DataFrame to reduce dimensionality for.
             n_components: Optional number of components to reduce to.
             
         Returns:
             Results with dimensionality reduction.
         """
+        if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+            return {"success": False, "response": "No dataset provided. Please load a dataset first.", "chat_history": self.chat_history}
         # Add the data to the code generator
-        self.code_generator.locals_dict["df"] = data
+        self.code_generator.locals_dict["df"] = df
         
         query = (
             "Please reduce the dimensionality of this dataset using appropriate methods "
@@ -181,49 +191,54 @@ class FeatureEngineerAgent(BaseAgent):
             self.code_generator.locals_dict["n_components"] = n_components
             query += f" Please reduce to approximately {n_components} components."
         
-        # Run the dimensionality reduction query
-        result = self.run(query)
+        # Run the dimensionality reduction query - explicitly pass df as data parameter
+        result = self.run(query, data=df)
         
         return result
     
-    def handle_time_series_features(self, data: pd.DataFrame, time_column: str) -> Dict[str, Any]:
+    def handle_time_series_features(self, df: pd.DataFrame, time_column) -> Dict[str, Any]:
         """Handle time series features.
         
         Args:
-            data: DataFrame with time series data.
+            df: DataFrame with time series data.
             time_column: Name of the time column.
             
         Returns:
             Results with time series features.
         """
+        if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+            return {"success": False, "response": "No dataset provided. Please load a dataset first.", "chat_history": self.chat_history}
         # Add the data to the code generator
-        self.code_generator.locals_dict["df"] = data
+        self.code_generator.locals_dict["df"] = df
         self.code_generator.locals_dict["time_column"] = time_column
         
-        # Run the time series features query
+        # Run the time series features query - explicitly pass df as data parameter
         result = self.run(
             f"Please create appropriate time series features from the time column '{time_column}'. "
             "Consider extracting time components (e.g., hour, day, month, year, day of week), "
             "creating lag features, rolling window features, and other relevant time series features. "
-            "Explain why each created feature might be useful for modeling."
+            "Explain why each created feature might be useful for modeling.",
+            data=df
         )
         
         return result
     
-    def custom_feature_engineering(self, data: pd.DataFrame, query: str) -> Dict[str, Any]:
+    def custom_feature_engineering(self, df: pd.DataFrame, query: str) -> Dict[str, Any]:
         """Perform custom feature engineering.
         
         Args:
-            data: DataFrame to engineer features for.
+            df: DataFrame to engineer features for.
             query: Custom feature engineering query.
             
         Returns:
             Results with custom feature engineering.
         """
+        if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+            return {"success": False, "response": "No dataset provided. Please load a dataset first.", "chat_history": self.chat_history}
         # Add the data to the code generator
-        self.code_generator.locals_dict["df"] = data
+        self.code_generator.locals_dict["df"] = df
         
-        # Run the custom feature engineering query
-        result = self.run(query)
+        # Run the custom feature engineering query - explicitly pass df as data parameter
+        result = self.run(query, data=df)
         
         return result 
