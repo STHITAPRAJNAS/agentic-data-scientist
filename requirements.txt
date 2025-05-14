@@ -1,0 +1,34 @@
+# Core dependencies
+numpy<2.0.0
+pandas>=2.0.0
+scikit-learn>=1.0.0
+matplotlib>=3.0.0
+seaborn>=0.12.0
+plotly>=5.0.0
+streamlit>=1.0.0
+python-dotenv>=1.0.0
+pydantic>=2.0.0
+
+# LLM and AI dependencies
+langchain>=0.1.0
+langchain-google-genai>=0.0.5
+google-generativeai>=0.3.0
+
+# Database dependencies
+sqlalchemy>=2.0.0
+pymysql>=1.0.0
+cryptography>=41.0.0
+
+# Utility dependencies
+nest-asyncio>=1.5.0
+watchdog>=3.0.0
+
+# For feature engineering and model building
+xgboost>=1.7.0
+lightgbm>=4.0.0
+shap>=0.42.0
+category-encoders>=2.6.0
+yellowbrick>=1.5.0
+
+# For notebook execution within Streamlit
+ipython>=8.0.0 
