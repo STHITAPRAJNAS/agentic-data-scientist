@@ -18,11 +18,11 @@ from agentic_data_scientist.connectors.file_connector import FileConnector
 def main():
     """Main function to demonstrate the usage of agents."""
     # Get API key from environment variable or prompt user
-    api_key = os.environ.get("GEMINI_API_KEY")
+    api_key = os.environ.get("GOOGLE_API_KEY")
     
     if not api_key:
         api_key = input("Please enter your Google Gemini API Key: ")
-        os.environ["GEMINI_API_KEY"] = api_key
+        os.environ["GOOGLE_API_KEY"] = api_key
     
     print("Setting up database connector...")
     db_path = "../data/test_database.db"

@@ -33,7 +33,7 @@ def print_help():
     print("  python run.py app      - Run the Streamlit application")
     print("  python run.py example  - Run the basic usage example")
     print("\nYou'll need a Google Gemini API key to use the application.")
-    print("You can set it in the Streamlit UI or as an environment variable GEMINI_API_KEY.")
+    print("You can set it in the Streamlit UI or as an environment variable GOOGLE_API_KEY.")
 
 def setup_database():
     """Set up the test database."""

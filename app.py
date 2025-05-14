@@ -125,11 +125,11 @@ st.markdown("""
 
 def initialize_agents():
     """Initialize the agents with the API key from environment variables."""
-    api_key = os.getenv("GEMINI_API_KEY")
-    model_name = os.getenv("LLM_MODEL", "gemini-2.0-flash")
+    api_key = os.getenv("GOOGLE_API_KEY")
+    model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
     
     if not api_key:
-        st.error("API key is not set in environment variables. Please set GEMINI_API_KEY in your .env file.")
+        st.error("API key is not set in environment variables. Please set GOOGLE_API_KEY in your .env file.")
         return False
     
     try:

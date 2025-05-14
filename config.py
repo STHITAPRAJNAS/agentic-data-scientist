@@ -41,8 +41,8 @@ def load_config() -> AppConfig:
     # Override defaults with environment variables if they exist
     llm_config = LLMConfig(
         provider=os.getenv("LLM_PROVIDER", "gemini"),
-        api_key=os.getenv("GEMINI_API_KEY"),
-        model=os.getenv("LLM_MODEL", "gemini-pro"),
+        api_key=os.getenv("GOOGLE_API_KEY"),
+        model=os.getenv("GEMINI_MODEL", "gemini-pro"),
         temperature=float(os.getenv("LLM_TEMPERATURE", "0.7")),
         max_tokens=int(os.getenv("LLM_MAX_TOKENS", "2048")),
     )
