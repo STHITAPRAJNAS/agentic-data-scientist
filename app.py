@@ -27,6 +27,16 @@ from agentic_data_scientist.agents.data_explorer import DataExplorerAgent, DataE
 from agentic_data_scientist.agents.feature_engineer import FeatureEngineerAgent, FeatureEngineerAgentConfig
 from agentic_data_scientist.agents.model_builder import ModelBuilderAgent, ModelBuilderAgentConfig
 
+# Import the AutoGen-based agents
+from agentic_data_scientist.autogen_agents.agent_wrappers import (
+    AutoGenDataExplorerAgentConfig,
+    AutoGenFeatureEngineerAgentConfig,
+    AutoGenModelBuilderAgentConfig,
+    AutoGenDataExplorerAgent,
+    AutoGenFeatureEngineerAgent,
+    AutoGenModelBuilderAgent
+)
+
 # Set page configuration
 st.set_page_config(
     page_title="Agentic Data Scientist",
@@ -64,6 +74,10 @@ if "loaded_data_info" not in st.session_state:
     st.session_state.loaded_data_info = None
 if "is_data_loaded" not in st.session_state:
     st.session_state.is_data_loaded = False
+
+# Add a session state variable for agent type
+if "agent_type" not in st.session_state:
+    st.session_state.agent_type = "langchain"  # Default to LangChain agents
 
 # Custom CSS
 st.markdown("""
@@ -151,35 +165,67 @@ def initialize_agents():
         model = genai.GenerativeModel(model_name)
         response = model.generate_content("Test")
         
-        # Initialize the data explorer agent
-        explorer_config = DataExplorerAgentConfig(
-            name="DataExplorerAgent",
-            description="Agent for exploring and analyzing data",
-            api_key=api_key,
-            model=model_name,
-            code_execution=True
-        )
-        st.session_state.explorer_agent = DataExplorerAgent(explorer_config)
-        
-        # Initialize the feature engineer agent
-        engineer_config = FeatureEngineerAgentConfig(
-            name="FeatureEngineerAgent",
-            description="Agent for engineering features",
-            api_key=api_key,
-            model=model_name,
-            code_execution=True
-        )
-        st.session_state.feature_engineer_agent = FeatureEngineerAgent(engineer_config)
-        
-        # Initialize the model builder agent
-        model_config = ModelBuilderAgentConfig(
-            name="ModelBuilderAgent",
-            description="Agent for building models",
-            api_key=api_key,
-            model=model_name,
-            code_execution=True
-        )
-        st.session_state.model_builder_agent = ModelBuilderAgent(model_config)
+        # Initialize agents based on the selected agent type
+        if st.session_state.agent_type == "autogen":
+            # Initialize the AutoGen-based data explorer agent
+            explorer_config = AutoGenDataExplorerAgentConfig(
+                name="DataExplorerAgent",
+                description="Agent for exploring and analyzing data",
+                api_key=api_key,
+                model=model_name,
+                code_execution=True
+            )
+            st.session_state.explorer_agent = AutoGenDataExplorerAgent(explorer_config)
+            
+            # Initialize the AutoGen-based feature engineer agent
+            engineer_config = AutoGenFeatureEngineerAgentConfig(
+                name="FeatureEngineerAgent",
+                description="Agent for engineering features",
+                api_key=api_key,
+                model=model_name,
+                code_execution=True
+            )
+            st.session_state.feature_engineer_agent = AutoGenFeatureEngineerAgent(engineer_config)
+            
+            # Initialize the AutoGen-based model builder agent
+            model_config = AutoGenModelBuilderAgentConfig(
+                name="ModelBuilderAgent",
+                description="Agent for building models",
+                api_key=api_key,
+                model=model_name,
+                code_execution=True
+            )
+            st.session_state.model_builder_agent = AutoGenModelBuilderAgent(model_config)
+        else:
+            # Initialize the original LangChain-based data explorer agent
+            explorer_config = DataExplorerAgentConfig(
+                name="DataExplorerAgent",
+                description="Agent for exploring and analyzing data",
+                api_key=api_key,
+                model=model_name,
+                code_execution=True
+            )
+            st.session_state.explorer_agent = DataExplorerAgent(explorer_config)
+            
+            # Initialize the original LangChain-based feature engineer agent
+            engineer_config = FeatureEngineerAgentConfig(
+                name="FeatureEngineerAgent",
+                description="Agent for engineering features",
+                api_key=api_key,
+                model=model_name,
+                code_execution=True
+            )
+            st.session_state.feature_engineer_agent = FeatureEngineerAgent(engineer_config)
+            
+            # Initialize the original LangChain-based model builder agent
+            model_config = ModelBuilderAgentConfig(
+                name="ModelBuilderAgent",
+                description="Agent for building models",
+                api_key=api_key,
+                model=model_name,
+                code_execution=True
+            )
+            st.session_state.model_builder_agent = ModelBuilderAgent(model_config)
         
         return True
     except Exception as e:
@@ -1429,30 +1475,62 @@ def verify_data(df, action_name="this action"):
         return False
 
 def main():
-    """Main function to run the Streamlit app."""
-    # Apply nest_asyncio to handle nested event loops
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    nest_asyncio.apply(loop)
+    """Main function to render the Streamlit app."""
+    st.title("🧪 Agentic Data Scientist")
     
-    st.title("Agentic Data Scientist 🧪")
-    st.markdown("""
-    This application provides an AI-powered data science team to help you perform various data science tasks.
-    Load your data, explore it, engineer features, and build machine learning models - all with the help of AI agents.
-    """)
+    # Add a sidebar
+    with st.sidebar:
+        st.header("Settings")
+        
+        # Add a selectbox for agent type
+        agent_type = st.selectbox(
+            "Select Agent Framework",
+            ["LangChain (default)", "AutoGen"],
+            index=0,
+            help="Choose between LangChain and AutoGen agent implementations."
+        )
+        
+        # Update the agent type in session state
+        st.session_state.agent_type = "langchain" if agent_type == "LangChain (default)" else "autogen"
+        
+        # Add API key input
+        api_key = st.text_input("Google Gemini API Key", type="password", value=os.getenv("GOOGLE_API_KEY", ""))
+        if api_key:
+            os.environ["GOOGLE_API_KEY"] = api_key
+        
+        # Initialize agents button
+        if st.button("Initialize Agents"):
+            if initialize_agents():
+                st.success(f"Successfully initialized {agent_type} agents!")
+            else:
+                st.error("Failed to initialize agents. Check your API key and try again.")
+        
+        # Show the current agent framework
+        st.info(f"Current Agent Framework: {agent_type}")
+        
+        # Reset session
+        if st.button("Reset Session"):
+            # Clear session state except for agent_type
+            current_agent_type = st.session_state.agent_type
+            for key in list(st.session_state.keys()):
+                if key != "agent_type":
+                    del st.session_state[key]
+            st.session_state.agent_type = current_agent_type
+            st.experimental_rerun()
     
-    # Sidebar
-    st.sidebar.title("About")
-    st.sidebar.info(
-        """
-        This application uses AI agents to help you perform data science tasks.
-        It's powered by Google Gemini Pro LLM and runs locally.
-        """
-    )
+    # Check if agents are initialized
+    agents_initialized = all([
+        "explorer_agent" in st.session_state,
+        "feature_engineer_agent" in st.session_state,
+        "model_builder_agent" in st.session_state
+    ])
     
+    if not agents_initialized:
+        st.warning("Agents not initialized. Please enter your Google Gemini API key and click Initialize Agents.")
+        if not os.getenv("GOOGLE_API_KEY"):
+            st.info("You can get a Google Gemini API key from https://makersuite.google.com/")
+        return
+
     # Main content
     tabs = st.tabs(["Load Data", "Explore Data", "Engineer Features", "Build Models"])
 
